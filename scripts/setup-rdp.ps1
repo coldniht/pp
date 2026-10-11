@@ -35,19 +35,48 @@ $osName = if ($os) { $os.Caption } else { 'Windows' }
 $osBuild = if ($os) { "$($os.Version)" } else { '' }
 Log "mode dasar | hostname $hostName | durasi $dur menit | user $u | OS $osName ($osBuild)"
 
-# ---------- 1. User admin (akses penuh, password tetap) ----------
+# ---------- 1. User admin ----------
 $sp = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
-# === runneradmin = akun bawaan runner GitHub (paling tinggi), jangan dihapus ===
-if ($u.ToLower() -eq 'runneradmin') {
-  Log "mode runneradmin: pakai akun bawaan runner (highest, tidak dibuat ulang)"
-  try { Set-LocalUser -Name $u -Password $sp -PasswordNeverExpires $true -AccountNeverExpires -ErrorAction Stop | Out-Null } catch {
-    try { & net user $u $env:RDP_PASSWORD /add 2>&1 | Out-Null; & net user $u $env:RDP_PASSWORD 2>&1 | Out-Null } catch {}
-  }
-  try { Set-LocalUser -Name $u -PasswordNeverExpires $true -AccountNeverExpires -ErrorAction SilentlyContinue } catch {}
-} else {
-  if (Get-LocalUser -Name $u -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $u }
-  New-LocalUser -Name $u -Password $sp -FullName 'XyRDP Admin' -PasswordNeverExpires -AccountNeverExpires -Description 'XyRDP remote user' | Out-Null
+
+# Validasi password tanpa menampilkan nilainya
+$pw = $env:RDP_PASSWORD
+$classes = 0
+if ($pw -cmatch '[A-Z]') { $classes++ }
+if ($pw -cmatch '[a-z]') { $classes++ }
+if ($pw -match '[0-9]') { $classes++ }
+if ($pw -match '[^a-zA-Z0-9]') { $classes++ }
+
+if ($pw.Length -lt 12 -or $classes -lt 3) {
+    Log 'ERROR: Password perlu minimal 12 karakter dan 3 jenis karakter.'
+    exit 1
 }
+
+try {
+    $existing = Get-LocalUser -Name $u -ErrorAction SilentlyContinue
+
+    if ($existing) {
+        Set-LocalUser -Name $u -Password $sp `
+            -PasswordNeverExpires $true -ErrorAction Stop
+        Log "Password akun '$u' berhasil diperbarui."
+    } else {
+        New-LocalUser -Name $u -Password $sp `
+            -FullName 'XyRDP Admin' `
+            -PasswordNeverExpires `
+            -AccountNeverExpires `
+            -Description 'XyRDP remote user' `
+            -ErrorAction Stop | Out-Null
+        Log "Akun '$u' berhasil dibuat."
+    }
+} catch {
+    Log "ERROR: Gagal membuat atau memperbarui akun. Periksa kebijakan password Windows."
+    exit 1
+}
+
+Add-LocalGroupMember -Group 'Administrators' `
+    -Member $u -ErrorAction Stop
+Add-LocalGroupMember -Group 'Remote Desktop Users' `
+    -Member $u -ErrorAction SilentlyContinue
+
 Add-LocalGroupMember -Group 'Administrators'         -Member $u -ErrorAction SilentlyContinue
 Add-LocalGroupMember -Group 'Remote Desktop Users'   -Member $u -ErrorAction SilentlyContinue
 # Pastikan runneradmin juga tetap ada sebagai fallback (jaga kalau user pakai xyadmin tapi mau runneradmin juga bisa RDP)
